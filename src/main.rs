@@ -46,10 +46,12 @@ OPTIONS:
                          (automatic when output isn't a terminal, e.g. systemd)
 
 KEYS (live table only):
-    ↑/↓ or j/k           Select a stream
+    ↑/↓ or j/k           Select a stream (its details show below the table)
     g / c / m / a        Move it to Game / Chat / Music / App now
     G / C / M / A        Same, and always: saves an override like --set
-    q                    Quit
+    v                    Show the facts under every stream (like -v)
+    q or Ctrl+C          Quit
+    (On --replay only browsing works; nothing is moved.)
     -h, --help           Show this help
 ";
 
@@ -84,8 +86,11 @@ struct App {
     interactive: bool,
     /// The stream picked with ↑/↓.
     selected: Option<u32>,
-    /// Result of the last key action, shown under the table.
+    /// Result of the last key action, shown on the bottom bar.
     status: String,
+    status_is_error: bool,
+    /// Reading a saved dump: browsing works, moving doesn't.
+    replay: bool,
 }
 
 /// Everything the main loop reacts to. One thread reads pw-dump and another
@@ -131,10 +136,20 @@ fn main() {
     } else {
         observations::Observations::open()
     };
-    let mode = if act { "sorting" } else { "observe-only" };
+    let mode = if replay.is_some() {
+        "replay"
+    } else if act {
+        "sorting"
+    } else {
+        "observe-only"
+    };
     let mut header = format!("{mode} · rules: {rules_source}");
     if let Some(l) = &log {
         header.push_str(&format!(" · log: {}", l.path.display()));
+    }
+    // Show paths under the home directory as ~/… to keep the line short.
+    if let Ok(home) = std::env::var("HOME") {
+        header = header.replace(&format!("{home}/"), "~/");
     }
     if !table {
         eprintln!("{header}");
@@ -169,10 +184,12 @@ fn main() {
         act,
         log,
         seen: BTreeMap::new(),
-        // Keys move live streams, so never offer them on a replay.
-        interactive: table && replay.is_none() && table::enter_raw_mode(),
+        interactive: table && table::enter_raw_mode(),
         selected: None,
         status: String::new(),
+        status_is_error: false,
+        // Replayed node ids belong to an old session, so keys never move them.
+        replay: replay.is_some(),
     };
     if table {
         print!("\x1b[2J"); // clear the screen once; redraws then overwrite in place
@@ -230,7 +247,15 @@ fn main() {
             }
             Msg::Key(key) => app.on_key(key),
             Msg::InputEnded(Some(e)) => die(&format!("couldn't parse pw-dump output: {e}")),
-            Msg::InputEnded(None) => break,
+            Msg::InputEnded(None) => {
+                // A finished replay stays on screen for browsing until q.
+                if app.replay && app.interactive {
+                    app.status = "end of replay".to_string();
+                    app.redraw();
+                    continue;
+                }
+                break;
+            }
         }
     }
 
@@ -253,20 +278,48 @@ impl App {
                 }
             }
         }
+        self.keep_selection();
         self.redraw();
+    }
+
+    /// Make sure something is selected while there are streams, so keys
+    /// work straight away. If the selected stream went away, select the
+    /// next one down (or the last one) instead of losing the cursor.
+    fn keep_selection(&mut self) {
+        if !self.interactive || self.selected.is_some_and(|id| self.seen.contains_key(&id)) {
+            return;
+        }
+        let from = self.selected.unwrap_or(0);
+        // `range(from..)` walks the sorted ids starting at `from`.
+        let next = self
+            .seen
+            .range(from..)
+            .next()
+            .or(self.seen.iter().next_back());
+        self.selected = next.map(|(id, _)| *id);
     }
 
     fn redraw(&self) {
         if !self.table {
             return;
         }
-        let footer = if self.interactive {
-            format!(
-                "{}\n↑/↓ select · g/c/m/a move to Game/Chat/Music/App · G/C/M/A always · q quit",
-                self.status
-            )
+        let keys: &[(&str, &str)] = if !self.interactive {
+            &[("Ctrl+C", "quit")]
+        } else if self.replay {
+            &[("↑↓", "select"), ("v", "facts"), ("q", "quit")]
         } else {
-            "(Ctrl+C to quit)".to_string()
+            &[
+                ("↑↓", "select"),
+                ("g c m a", "move to Game/Chat/Music/App"),
+                ("G C M A", "always"),
+                ("v", "facts"),
+                ("q", "quit"),
+            ]
+        };
+        let footer = table::Footer {
+            status: &self.status,
+            status_is_error: self.status_is_error,
+            keys,
         };
         table::draw(
             &self.header,
@@ -292,7 +345,12 @@ impl App {
                 };
                 self.selected = Some(ids[next]);
             }
-            'g' | 'c' | 'm' | 'a' | 'G' | 'C' | 'M' | 'A' => self.assign(key),
+            'v' => self.verbose = !self.verbose,
+            'g' | 'c' | 'm' | 'a' | 'G' | 'C' | 'M' | 'A' => {
+                // Assume it fails; `assign` clears this when it works.
+                self.status_is_error = true;
+                self.assign(key);
+            }
             _ => return,
         }
         self.redraw();
@@ -308,8 +366,12 @@ impl App {
             _ => Channel::App,
         };
         let always = key.is_ascii_uppercase();
+        if self.replay {
+            self.status = "this is a replay: nothing to move".to_string();
+            return;
+        }
         let Some(id) = self.selected.filter(|id| self.seen.contains_key(id)) else {
-            self.status = "select a stream first (↑/↓)".to_string();
+            self.status = "nothing to move yet".to_string();
             return;
         };
         let Some(seen) = self.seen.get_mut(&id) else {
@@ -333,6 +395,7 @@ impl App {
         match move_stream(id, channel) {
             Ok(()) => {
                 msg.push_str(&format!("moved #{id} {} → {}", seen.name, channel.label()));
+                self.status_is_error = false;
                 seen.routed = Some(Routed {
                     channel: Some(channel),
                     sink_label: channel.label().to_string(),

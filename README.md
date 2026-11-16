@@ -39,14 +39,18 @@ To remove it all:
 ## Usage
 
 Run `pipesort` in a terminal to see a live table of playing streams: where
-each one went, where pipesort thinks it belongs, and why.
+each one is now, where pipesort thinks it belongs (`≠` marks a mismatch), and
+why. The selected stream's full reason and process facts show below the table.
 
 | Key | Action |
 |---|---|
 | ↑/↓ or j/k | Select a stream |
 | g / c / m / a | Move it to Game / Chat / Music / App now |
 | G / C / M / A | Same, and always put this app there |
-| q | Quit |
+| v | Show the facts under every stream |
+| q or Ctrl+C | Quit |
+
+`--replay` opens the same view for browsing; nothing is moved.
 
 From the command line:
 

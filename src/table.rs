@@ -1,10 +1,15 @@
 //! The live table shown when running in a terminal.
 //!
-//! Every time something changes, the whole table is redrawn from the top of
-//! the screen. Colours and the cursor moves are plain ANSI escape codes
-//! (the `\x1b[...m` strings), so no extra crate is needed.
+//! Every time something changes, the whole screen is redrawn from the top.
+//! Colours and cursor moves are plain ANSI escape codes (the `\x1b[...m`
+//! strings), so no extra crate is needed.
+//!
+//! Layout, top to bottom: title bar, stream table, details of the selected
+//! stream, and a status + key bar pinned to the bottom of the screen
+//! (the htop / nano convention).
 
 use crate::Seen;
+use crate::classify::Confidence;
 use crate::rules::Channel;
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -21,116 +26,182 @@ const MAGENTA: &str = "\x1b[35m";
 const CYAN: &str = "\x1b[36m";
 const REVERSE: &str = "\x1b[7m";
 
-// Column widths (in characters). The reason column gets whatever is left.
+// Fixed column widths (in characters). STREAM and REASON share the rest.
 const ID_W: usize = 6;
-const NAME_W: usize = 26;
-const WP_W: usize = 12;
-const CLS_W: usize = 11;
-const CONF_W: usize = 7;
+const NOW_W: usize = 7;
+const DET_W: usize = 8;
+const CONF_W: usize = 4;
 
-/// `selected` is highlighted; `footer` lines go under the table.
+/// What goes on the bottom bar.
+pub struct Footer<'a> {
+    /// Result of the last key action; empty for none.
+    pub status: &'a str,
+    pub status_is_error: bool,
+    /// (key, what it does) pairs, e.g. ("q", "quit").
+    pub keys: &'a [(&'a str, &'a str)],
+}
+
+/// `header` is "mode · details"; the mode part is shown as a coloured badge.
 pub fn draw(
     header: &str,
     rows: &BTreeMap<u32, Seen>,
     verbose: bool,
     selected: Option<u32>,
-    footer: &str,
+    footer: &Footer,
 ) {
-    // Width inside the box: terminal width minus "│ " and " │".
-    let inner = terminal_width().saturating_sub(4).max(60);
-    let fixed = ID_W + NAME_W + WP_W + CLS_W + CONF_W + 5; // +5 single spaces
-    let reason_w = inner.saturating_sub(fixed).max(10);
+    let (height, width) = terminal_size();
+    let width = width.max(60);
+    // Two spaces of margin on the left (the selection marker goes there).
+    let body = width - 2;
+    let fixed = ID_W + NOW_W + 2 + DET_W + CONF_W + 5; // +2 for "✓ ", +5 spaces
+    let flexible = body.saturating_sub(fixed);
+    let name_w = (flexible * 2 / 5).clamp(12, 30);
+    let reason_w = flexible.saturating_sub(name_w).max(8);
 
     let mut out = String::new();
     // \x1b[H moves the cursor to the top-left corner. Each line ends with
     // \x1b[K (clear rest of line) so nothing from the previous frame shows.
     out.push_str("\x1b[H");
+
+    let (mode, details) = header.split_once(" · ").unwrap_or((header, ""));
+    let badge = match mode {
+        "sorting" => GREEN,
+        "replay" => MAGENTA,
+        _ => YELLOW,
+    };
     line(
         &mut out,
-        &format!("  {BOLD}pipesort{RESET} {DIM}{header}{RESET}"),
+        &format!("  {BOLD}pipesort{RESET}  {badge}{REVERSE} {mode} {RESET}  {DIM}{details}{RESET}"),
     );
     line(&mut out, "");
+
     let head = format!(
         "{} {} {} {} {} {}",
         pad("ID", ID_W),
-        pad("STREAM", NAME_W),
-        pad("WIREPLUMBER", WP_W),
-        pad("CLASSIFIER", CLS_W),
+        pad("STREAM", name_w),
+        pad("NOW IN", NOW_W + 2),
+        pad("DETECTED", DET_W),
         pad("CONF", CONF_W),
         pad("REASON", reason_w),
     );
     line(&mut out, &format!("  {BOLD}{head}{RESET}"));
 
+    if rows.is_empty() {
+        line(&mut out, "");
+        line(
+            &mut out,
+            &format!("  {DIM}Nothing playing yet. Start some audio and it shows up here.{RESET}"),
+        );
+    }
+
     let mut differs = 0;
     for (id, seen) in rows {
-        let wirepl = match &seen.routed {
-            None => paint("…", WP_W, DIM),
-            Some(r) => match r.channel {
-                Some(ch) => paint(ch.label(), WP_W, colour(ch)),
-                // Linked to something that isn't one of our three sinks.
-                None => paint(&r.sink_label, WP_W, MAGENTA),
-            },
+        let (now, mark) = match &seen.routed {
+            None => (paint("…", NOW_W, DIM), paint(" ", 1, "")),
+            Some(r) => {
+                let now = match r.channel {
+                    Some(ch) => paint(ch.label(), NOW_W, colour(ch)),
+                    // Linked to something that isn't one of our four sinks.
+                    None => paint(&r.sink_label, NOW_W, MAGENTA),
+                };
+                if r.channel == Some(seen.verdict.channel) {
+                    (now, paint("✓", 1, GREEN))
+                } else {
+                    differs += 1;
+                    (now, paint("≠", 1, RED))
+                }
+            }
         };
-        let conf = format!("{:?}", seen.verdict.confidence);
-        let conf_style = match seen.verdict.confidence {
-            crate::classify::Confidence::High => BOLD,
-            crate::classify::Confidence::Medium => "",
-            crate::classify::Confidence::Low => DIM,
-        };
-        let mut lines = vec![format!(
-            "{} {} {} {} {} {}",
-            paint(
-                &format!("#{id}"),
-                ID_W,
-                if selected == Some(*id) { REVERSE } else { "" }
-            ),
-            pad(&seen.name, NAME_W),
-            wirepl,
-            paint(
-                seen.verdict.channel.label(),
-                CLS_W,
-                colour(seen.verdict.channel)
-            ),
-            paint(&conf, CONF_W, conf_style),
+        let ch = seen.verdict.channel;
+        let row = format!(
+            "{} {} {} {} {} {} {}",
+            pad(&format!("#{id}"), ID_W),
+            pad(&seen.name, name_w),
+            now,
+            mark,
+            paint(ch.label(), DET_W, colour(ch)),
+            paint(conf_word(seen.verdict.confidence), CONF_W, conf_style(seen)),
             pad(&seen.verdict.reason, reason_w),
-        )];
+        );
+        if selected == Some(*id) {
+            // Every cell ends in RESET, which would also end the highlight,
+            // so turn reverse video back on after each one.
+            let row = row.replace(RESET, &format!("{RESET}{REVERSE}"));
+            line(&mut out, &format!("{BOLD}▶{RESET} {REVERSE}{row}{RESET}"));
+        } else {
+            line(&mut out, &format!("  {row}"));
+        }
         if verbose {
             for f in seen.facts.lines() {
-                lines.push(paint(f, inner, DIM));
-            }
-        }
-
-        // Only a linked stream can differ; "…" means we don't know yet.
-        let differ = seen
-            .routed
-            .as_ref()
-            .is_some_and(|r| r.channel != Some(seen.verdict.channel));
-        if differ {
-            differs += 1;
-            let bar = "─".repeat(inner + 2);
-            line(&mut out, &format!("{RED}┌{bar}┐{RESET}"));
-            for l in &lines {
-                line(&mut out, &format!("{RED}│{RESET} {l} {RED}│{RESET}"));
-            }
-            line(&mut out, &format!("{RED}└{bar}┘{RESET}"));
-        } else {
-            for l in &lines {
-                line(&mut out, &format!("  {l}"));
+                line(&mut out, &paint(f, body, DIM));
             }
         }
     }
 
-    line(&mut out, "");
-    let summary = if differs > 0 {
-        format!("{RED}{differs} differ{RESET}")
+    // Details of the selected stream: the full reason (the table cuts it
+    // short) and the facts behind it.
+    if let Some((id, seen)) = selected.and_then(|id| rows.get_key_value(&id)) {
+        line(&mut out, "");
+        let title = format!(" #{id} {} ", seen.name);
+        let rule = "─".repeat(body.saturating_sub(2 + title.chars().count()));
+        line(
+            &mut out,
+            &format!("  {DIM}──{RESET}{BOLD}{title}{RESET}{DIM}{rule}{RESET}"),
+        );
+        let ch = seen.verdict.channel;
+        let place = match &seen.routed {
+            None => "not linked yet".to_string(),
+            Some(r) => format!("now in \"{}\"", r.sink_label),
+        };
+        line(
+            &mut out,
+            &format!(
+                "  {}{}{RESET} · {} confidence · {place}",
+                colour(ch),
+                ch.label(),
+                format!("{:?}", seen.verdict.confidence).to_lowercase()
+            ),
+        );
+        for l in wrap(&seen.verdict.reason, body - 2) {
+            line(&mut out, &format!("  {l}"));
+        }
+        for f in seen.facts.lines() {
+            line(
+                &mut out,
+                &format!("  {}", paint(f.trim_start(), body - 2, DIM)),
+            );
+        }
+    }
+    out.push_str("\x1b[J"); // clear everything below
+
+    // Bottom bar: summary + status on one line, keys on the last line.
+    // \x1b[ROW;1H jumps to that row. The last line has no "\n" so the
+    // screen doesn't scroll up.
+    let summary = if rows.is_empty() {
+        String::new()
+    } else if differs > 0 {
+        format!(
+            "{} streams · {RED}{differs} not in their channel{RESET}",
+            rows.len()
+        )
     } else {
-        "all agree".to_string()
+        format!(
+            "{} streams · {GREEN}all in their channel{RESET}",
+            rows.len()
+        )
     };
-    line(&mut out, &format!("  {} streams · {summary}", rows.len()));
-    for f in footer.lines() {
-        line(&mut out, &format!("  {DIM}{f}{RESET}"));
+    let status_style = if footer.status_is_error { RED } else { GREEN };
+    out.push_str(&format!("\x1b[{};1H", height.saturating_sub(1).max(1)));
+    line(
+        &mut out,
+        &format!("  {summary}   {status_style}{}{RESET}", footer.status),
+    );
+    let mut keys = String::from(" ");
+    for (key, action) in footer.keys {
+        keys.push_str(&format!(" {BOLD}{key}{RESET} {DIM}{action}{RESET}  "));
     }
-    out.push_str("\x1b[J"); // clear everything below the table
+    out.push_str(&keys);
+    out.push_str("\x1b[K");
 
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(out.as_bytes());
@@ -143,6 +214,22 @@ fn colour(ch: Channel) -> &'static str {
         Channel::Chat => CYAN,
         Channel::Music => BLUE,
         Channel::App => YELLOW,
+    }
+}
+
+fn conf_word(c: Confidence) -> &'static str {
+    match c {
+        Confidence::High => "high",
+        Confidence::Medium => "med",
+        Confidence::Low => "low",
+    }
+}
+
+fn conf_style(seen: &Seen) -> &'static str {
+    match seen.verdict.confidence {
+        Confidence::High => BOLD,
+        Confidence::Medium => "",
+        Confidence::Low => DIM,
     }
 }
 
@@ -168,12 +255,37 @@ fn pad(text: &str, width: usize) -> String {
     }
 }
 
+/// Split `text` into lines of at most `width` characters, breaking at
+/// spaces. A single word longer than `width` is cut by `pad` later.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let needed = current.chars().count() + 1 + word.chars().count();
+        if !current.is_empty() && needed > width {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines.into_iter().map(|l| pad(&l, width)).collect()
+}
+
 /// Ask `stty` for the terminal size; it prints "rows cols".
-/// Falls back to 100 columns if that doesn't work.
-fn terminal_width() -> usize {
-    stty(&["size"])
-        .and_then(|text| text.split_whitespace().nth(1)?.parse().ok())
-        .unwrap_or(100)
+/// Falls back to 24×100 if that doesn't work.
+fn terminal_size() -> (usize, usize) {
+    let size = stty(&["size"]).and_then(|text| {
+        let mut parts = text.split_whitespace();
+        let rows = parts.next()?.parse().ok()?;
+        let cols = parts.next()?.parse().ok()?;
+        Some((rows, cols))
+    });
+    size.unwrap_or((24, 100))
 }
 
 /// Run `stty` on the real terminal and return what it printed.
@@ -196,6 +308,8 @@ static SAVED_TTY: OnceLock<String> = OnceLock::new();
 
 /// Raw mode: keys arrive one at a time without Enter, aren't echoed, and
 /// Ctrl+C becomes a normal key so we can restore the terminal before quitting.
+/// Also switches to the alternate screen (like htop or less), so quitting
+/// gives back the shell exactly as it was.
 /// ponytail: a panic skips the restore; run `reset` if the terminal acts odd.
 pub fn enter_raw_mode() -> bool {
     let Some(saved) = stty(&["-g"]) else {
@@ -205,7 +319,7 @@ pub fn enter_raw_mode() -> bool {
     if stty(&["-icanon", "-echo", "-isig", "min", "1"]).is_none() {
         return false;
     }
-    print!("\x1b[?25l"); // hide the cursor
+    print!("\x1b[?1049h\x1b[?25l"); // alternate screen, hide the cursor
     true
 }
 
@@ -213,19 +327,26 @@ pub fn enter_raw_mode() -> bool {
 pub fn restore_terminal() {
     if let Some(saved) = SAVED_TTY.get() {
         stty(&[saved]);
-        println!("\x1b[?25h"); // show the cursor again
+        print!("\x1b[?25h\x1b[?1049l"); // show the cursor, leave alternate screen
         let _ = std::io::stdout().flush();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::pad;
+    use super::{pad, wrap};
 
     #[test]
     fn pad_truncates_and_pads() {
         assert_eq!(pad("abc", 5), "abc  ");
         assert_eq!(pad("abcdef", 4), "abc…");
         assert_eq!(pad("ééé", 3), "ééé");
+    }
+
+    #[test]
+    fn wrap_breaks_at_spaces() {
+        assert_eq!(wrap("aa bb cc", 5), vec!["aa bb", "cc   "]);
+        assert_eq!(wrap("", 5), Vec::<String>::new());
+        assert_eq!(wrap("toolongword x", 4), vec!["too…", "x   "]);
     }
 }
