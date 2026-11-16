@@ -1,1 +1,11 @@
+# Build output
 /target
+
+# Local AI-assistant context and settings
+CLAUDE.md
+.claude/
+
+# Backups and test captures you might make in the repo
+*.bak-*
+*.orig
+my-capture.json
