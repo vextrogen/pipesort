@@ -1,0 +1,12 @@
+[Unit]
+Description=Classify audio streams into Game / Chat / Music / App (moves misrouted streams into their channel)
+After=pipewire.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+ExecStart=%h/.local/bin/pipesort
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

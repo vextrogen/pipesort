@@ -1,0 +1,34 @@
+# pipesort rules
+# Copy to ~/.config/pipesort/rules.toml
+#
+# All matching is case-insensitive and substring-based, against the app's
+# name, binary, exe filename and Flatpak ID (run with -v to see them).
+# Your entries are added to the built-in lists, not replacing them.
+
+# Extra apps that are always Chat.
+chat_apps = [
+  # "element",
+  # "slack",
+]
+
+# Extra apps that are always Music.
+music_apps = [
+  # "my-player",
+]
+
+# Things that look like games (Wine, launchers) but aren't.
+not_games = [
+  # "itch",
+]
+
+# Overrides beat every other rule. The LAST matching one wins, so
+# `pipesort --set NAME CHANNEL` (which appends here) beats older ones.
+# channel is "game", "chat", "music" or "app".
+
+# [[override]]
+# match = "factorio"
+# channel = "game"
+
+# [[override]]
+# match = "helium"
+# channel = "app"

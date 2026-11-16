@@ -1,0 +1,184 @@
+[
+  {
+    "id": 40,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.name": "bluez_output.AirPods",
+        "node.description": "Luna's AirPods Max"
+      }
+    }
+  },
+  {
+    "id": 50,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.name": "sink_game",
+        "node.description": "Game",
+        "node.link-group": "loopback-1"
+      }
+    }
+  },
+  {
+    "id": 51,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Stream/Output/Audio",
+        "node.name": "sink_game.out",
+        "node.link-group": "loopback-1"
+      }
+    }
+  },
+  {
+    "id": 52,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.name": "sink_chat",
+        "node.description": "Chat",
+        "node.link-group": "loopback-2"
+      }
+    }
+  },
+  {
+    "id": 54,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.name": "sink_app",
+        "node.description": "App",
+        "node.link-group": "loopback-3"
+      }
+    }
+  },
+  {
+    "id": 60,
+    "type": "PipeWire:Interface:Link",
+    "info": {
+      "output-node-id": 51,
+      "input-node-id": 40
+    }
+  }
+]
+[
+  {
+    "id": 100,
+    "type": "PipeWire:Interface:Client",
+    "info": {
+      "props": {
+        "pipewire.sec.pid": 1233,
+        "application.name": "Helium"
+      }
+    }
+  },
+  {
+    "id": 138,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Stream/Output/Audio",
+        "node.name": "Helium",
+        "client.id": 100,
+        "application.name": "Helium",
+        "application.process.binary": "helium"
+      }
+    }
+  },
+  {
+    "id": 139,
+    "type": "PipeWire:Interface:Link",
+    "info": {
+      "output-node-id": 138,
+      "input-node-id": 54
+    }
+  },
+  {
+    "id": 140,
+    "type": "PipeWire:Interface:Link",
+    "info": {
+      "output-node-id": 138,
+      "input-node-id": 54
+    }
+  },
+  {
+    "id": 101,
+    "type": "PipeWire:Interface:Client",
+    "info": {
+      "props": {
+        "pipewire.sec.pid": 1234,
+        "application.name": "Cyberpunk2077.exe"
+      }
+    }
+  },
+  {
+    "id": 150,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Stream/Output/Audio",
+        "node.name": "Cyberpunk2077.exe",
+        "client.id": 101
+      }
+    }
+  },
+  {
+    "id": 151,
+    "type": "PipeWire:Interface:Link",
+    "info": {
+      "output-node-id": 150,
+      "input-node-id": 54
+    }
+  },
+  {
+    "id": 102,
+    "type": "PipeWire:Interface:Client",
+    "info": {
+      "props": {
+        "pipewire.sec.pid": 1235,
+        "application.name": "WEBRTC VoiceEngine"
+      }
+    }
+  },
+  {
+    "id": 118,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Stream/Input/Audio",
+        "node.name": "WEBRTC VoiceEngine",
+        "client.id": 102
+      }
+    }
+  },
+  {
+    "id": 126,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "media.class": "Stream/Output/Audio",
+        "node.name": "WEBRTC VoiceEngine",
+        "client.id": 102
+      }
+    }
+  },
+  {
+    "id": 127,
+    "type": "PipeWire:Interface:Link",
+    "info": {
+      "output-node-id": 126,
+      "input-node-id": 52
+    }
+  }
+]
+[
+  {
+    "id": 138,
+    "info": null
+  }
+]
